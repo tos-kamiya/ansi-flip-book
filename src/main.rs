@@ -83,7 +83,7 @@ fn main() -> io::Result<()> {
                     i = 0;
                 }
                 0x1b => {
-                    if line[i..i + ANSI_CLEAR_SCREEN.len()] == *ANSI_CLEAR_SCREEN {
+                    if line.len() >= i + ANSI_CLEAR_SCREEN.len() && line[i..i + ANSI_CLEAR_SCREEN.len()] == *ANSI_CLEAR_SCREEN {
                         stdout.write_all(&line[..i])?;
                         stdout.flush()?;
                         wait_millisec(opt.wait_clear_screen);
