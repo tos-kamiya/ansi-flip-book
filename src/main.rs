@@ -12,7 +12,7 @@ const ANSI_CLEAR_SCREEN: &[u8] = &[0x1b, b'[', b'2', b'J'];
 fn wait_millisec(wait: u32) {
     if wait > 0 {
         let (s, ms) = (wait / 1000, wait % 1000);
-        let duration = Duration::new(s as u64, ms * 1000_000);
+        let duration = Duration::new(s as u64, ms * 1_000_000);
         thread::sleep(duration);
     }
 }
@@ -55,7 +55,11 @@ fn main() -> io::Result<()> {
         // Adjust the search start position to prevent it falling into the middle of an ANSI escape sequence
         let last_line_len = line.len();
         line.extend_from_slice(&buf[0..n]);
-        let start = if last_line_len < longest_ansi_len { 0 } else { last_line_len - longest_ansi_len };
+        let start = if last_line_len < longest_ansi_len {
+            0
+        } else {
+            last_line_len - longest_ansi_len
+        };
 
         let mut i = start;
         while i < line.len() {
