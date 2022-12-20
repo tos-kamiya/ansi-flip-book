@@ -29,21 +29,22 @@ cargo uninstall ansi-flip-book
 
 ## Usage
 
-To replay a log:
+To replay a text including ANSI escape sequences:
 
 ```sh
-ansi-flip-book play < some-log-file
+ansi-flip-book play < some-text-file
 ```
 
-To record a command-line session as log file:
+To record a command-line session as a text file:
 
 ```sh
-ansi-flip-book log -- some-commmand-line > some-log-file
+ansi-flip-book log -- some-commmand-line > some-text-file
 ```
 
 ## Samples
 
-The file `samples/pip-install-opencv-python.log` is a sample of a command-line session.
+The file `samples/pip-install-opencv-python.log` is a sample of recording of a command-line session.
+The following command line will replay the run of the command, including coloring by ANSI escape sequences in the output.
 
 ```sh
 ansi-flip-book play < samples/pip-install-opencv-python.log
@@ -52,7 +53,8 @@ ansi-flip-book play < samples/pip-install-opencv-python.log
 ## Todo
 
 - [ ] Better replay of typing (looks as if a human typing)
-- [ ] Simple slow replay mode.
+- [ ] Fix performance glitch in `log` mode.
+- [ ] Simple slow replay mode
 
 ## Similar Apps
 
