@@ -3,10 +3,12 @@ use std::io::{Read, Write};
 use std::thread;
 use std::time::Duration;
 
+use nix::unistd::Uid;
+use regex::bytes::Regex;
+use shell_escape::unix::escape;
 use structopt::StructOpt;
+use subprocess::{Exec, Redirection};
 
-const BUFFER_SIZE: usize = 4 * 1024;
-const MAX_UNFLUSHED_LINE_SIZE: usize = 64 * 1024;
 const ANSI_CLEAR_SCREEN: &[u8] = &[0x1b, b'[', b'2', b'J'];
 
 fn wait_millisec(wait: u32) {
@@ -17,11 +19,22 @@ fn wait_millisec(wait: u32) {
     }
 }
 
+// ref: https://stackoverflow.com/questions/35901547/how-can-i-find-a-subsequence-in-a-u8-slice
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
 /// A TUI app to replay text including ANSI escape sequencs.
 /// Read text from the standard input and write to the standard output, with inserting a wait when a clear-screen ANSI escape sequence or a carridge-return char appears.
 #[derive(StructOpt, Debug)]
 #[structopt(name = "ansi-flip-book")]
-struct Opt {
+enum Opt {
+    Play(Play),
+    Log(Log),
+}
+
+#[derive(StructOpt, Debug)]
+struct Play {
     /// wait of clear screen, in millisecond
     #[structopt(short = "c", long, default_value = "200")]
     wait_clear_screen: u32,
@@ -33,78 +46,80 @@ struct Opt {
     /// wait of new line (LF), in millisecond
     #[structopt(short = "n", long, default_value = "5")]
     wait_new_line: u32,
+
+    /// wait of user typeing, in millisecond
+    #[structopt(short = "u", long, default_value = "80")]
+    wait_user_typing: u32,
+
+    /// regex pattern for shell prompt
+    #[structopt(short = "p", long, default_value = "^(.+@.+:.+[$] |[$] )")]
+    shell_prompt: String,
+}
+
+#[derive(StructOpt, Debug)]
+struct Log {
+    /// argv
+    cmd: Vec<String>,
 }
 
 fn main() -> io::Result<()> {
     let opt = Opt::from_args();
+    match opt {
+        Opt::Play(opt_play) => main_play(opt_play),
+        Opt::Log(opt_record) => main_record(opt_record),
+    }
+}
 
-    let longest_ansi_len = ANSI_CLEAR_SCREEN.len();
+fn main_play(opt: Play) -> io::Result<()> {
+    let shell_prompt_pattern = Regex::new(&opt.shell_prompt).unwrap();
 
-    let mut stdin = io::stdin();
     let mut stdout = io::stdout();
+    let mut stdin_iter = io::stdin().bytes();
+    loop {
+        // read until either \n or \r
+        let mut line: Vec<u8> = vec![];
+        let mut last_b: Option<u8> = None;
+        while let Some(r) = stdin_iter.next() {
+            let b = r?;
+            line.push(b);
+            if b == b'\n' && last_b != Some(b'\\') || b == b'\r' {
+                break;
+            }
+            last_b = Some(b);
+        }
 
-    let mut buf: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
-    let mut line: Vec<u8> = vec![];
-
-    while let Ok(n) = stdin.read(&mut buf) {
-        if n == 0 { // EOF
-            stdout.write_all(&line)?;
+        // reached EOF?
+        if line.len() == 0 {
             break;
         }
 
-        // Adjust the search start position to prevent it falling into the middle of an ANSI escape sequence
-        let last_line_len = line.len();
-        line.extend_from_slice(&buf[0..n]);
-        let start = if last_line_len < longest_ansi_len {
-            0
-        } else {
-            last_line_len - longest_ansi_len
-        };
-
-        let mut i = start;
-        while i < line.len() {
-            let prev_line_len = line.len();
-            let prev_i = i;
-            let b = line[i];
-            match b {
-                b'\n' => {
-                    stdout.write_all(&line[..i + 1])?;
-                    stdout.flush()?;
-                    wait_millisec(opt.wait_new_line);
-                    line.drain(..i + 1);
-                    i = 0;
-                }
-                b'\r' => {
-                    stdout.write_all(&line[..i])?;
-                    stdout.flush()?;
-                    wait_millisec(opt.wait_carrige_return);
-                    stdout.write_all(&line[i..i + 1])?;
-                    line.drain(..i + 1);
-                    i = 0;
-                }
-                0x1b => {
-                    if line.len() >= i + ANSI_CLEAR_SCREEN.len() && line[i..i + ANSI_CLEAR_SCREEN.len()] == *ANSI_CLEAR_SCREEN {
-                        stdout.write_all(&line[..i])?;
-                        stdout.flush()?;
-                        wait_millisec(opt.wait_clear_screen);
-                        stdout.write_all(&line[i..i + ANSI_CLEAR_SCREEN.len()])?;
-                        line.drain(..i + ANSI_CLEAR_SCREEN.len());
-                        i = 0;
-                    } else {
-                        i += 1;
-                    }
-                }
-                _ => {
-                    i += 1;
-                }
+        if let Some(caps) = shell_prompt_pattern.captures(&line) {
+            let prompt_end_pos = caps.get(1).unwrap().end();
+            stdout.write_all(&line[..prompt_end_pos])?;
+            stdout.flush()?;
+            for b in line[prompt_end_pos..].iter() {
+                stdout.write_all(&[*b])?;
+                stdout.flush()?;
+                wait_millisec(opt.wait_user_typing);
             }
-            assert!(line.len() < prev_line_len || i > prev_i);
-        }
+        } else {
+            while let Some(pos) = find_subsequence(&line, ANSI_CLEAR_SCREEN) {
+                stdout.write_all(&line[..pos])?;
+                stdout.flush()?;
+                wait_millisec(opt.wait_clear_screen);
+                line.drain(..pos + ANSI_CLEAR_SCREEN.len());
+            }
 
-        if line.len() > MAX_UNFLUSHED_LINE_SIZE {
-            let end = line.len() - longest_ansi_len;
-            stdout.write_all(&line[..end])?;
-            line.drain(..end);
+            if line.last() == Some(&b'\r') {
+                stdout.write_all(&line[..line.len() - 1])?;
+                stdout.flush()?;
+                wait_millisec(opt.wait_carrige_return);
+                stdout.write_all(&line[line.len() - 1..])?;
+            } else {
+                stdout.write_all(&line)?;
+                stdout.flush()?;
+                wait_millisec(opt.wait_new_line);
+            }
         }
     }
     stdout.write_all(b"\n")?;
@@ -114,3 +129,32 @@ fn main() -> io::Result<()> {
 }
 
 // ref: ANSI Escape Sequences https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797
+
+fn main_record(opt: Log) -> io::Result<()> {
+    let mut cmd = vec!["unbuffer", "-p"];
+    for s in opt.cmd.iter() {
+        cmd.push(&s);
+    }
+
+    let exec = Exec::cmd(cmd[0]).args(&cmd[1..]).stderr(Redirection::Merge);
+    let r = exec.stream_stdout().unwrap();
+
+    let mut stdout = io::stdout();
+
+    stdout.write(
+        if Uid::effective().is_root() { b"#" } else { b"$" }
+    )?;
+    for a in opt.cmd {
+        stdout.write(b" ")?;
+        let s: String = escape(a.into()).to_string();
+        stdout.write(s.as_bytes())?;
+    }
+    stdout.write(b"\n")?;
+
+    for b in r.bytes() {
+        stdout.write(&[b.unwrap()])?;
+    }
+    stdout.flush()?;
+
+    Ok(())
+}
