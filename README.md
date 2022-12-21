@@ -52,6 +52,7 @@ ansi-flip-book play < samples/pip-install-opencv-python.log
 
 ## Todo
 
+- [ ] Better error messages (not just panics)
 - [ ] Better replay of typing (looks as if a human typing)
 - [ ] Fix performance glitch in `log` mode.
 - [ ] Simple slow replay mode
